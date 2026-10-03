@@ -28,6 +28,7 @@ import {
   DemuxPipeline,
   AudioDecodePipeline,
   VideoDecodePipeline,
+  VideoPacketPipeline,
   AudioRenderPipeline,
   VideoRenderPipeline,
   Stats
@@ -168,6 +169,7 @@ import type { AVPlayerGlobalData } from './struct'
 import IODemuxPipelineProxy from './worker/IODemuxPipelineProxy'
 import AudioPipelineProxy from './worker/AudioPipelineProxy'
 import VideoPipelineProxy from './worker/VideoPipelineProxy'
+import VideoPacketPipelineProxy from './worker/VideoPacketPipelineProxy'
 import MSEPipelineProxy from './worker/MSEPipelineProxy'
 import getKeySystemFromSystemId from './drm/getKeySystemFromSystemId'
 import { DRMType } from './drm/drm'
@@ -304,6 +306,10 @@ export interface AVPlayerOptions {
    * 是否开启 jitter buffer
    */
   enableJitterBuffer?: boolean
+  /**
+   * 是否启用视频 packet 处理 pipeline（处于 demux 和 video decoder 之间）
+   */
+  enableVideoPacketPipeline?: boolean
   /**
    * 是否开启低延时模式（直播）开启之后会根据网络情况自动调整 buffer，尽量在不卡顿的情况下降低延时
    */
@@ -495,6 +501,7 @@ const defaultAVPlayerOptions: Partial<AVPlayerOptions> = {
   enableAudioWorklet: true,
   loop: false,
   enableJitterBuffer: true,
+  enableVideoPacketPipeline: true,
   jitterBufferMax: 4,
   jitterBufferMin: 1,
   lowLatency: false,
@@ -611,8 +618,10 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   // TODO 若需要同时播放大量视频，可以考虑实现一个 VideoDecoderThreadPool
   // 来根据各个视频规格做线程解码任务调度，降低系统线程切换开销，这里就不实现了
   private VideoDecoderThread: Thread<VideoDecodePipeline>
+  private VideoPacketThread: Thread<VideoPacketPipeline>
   private VideoRenderThread: Thread<VideoRenderPipeline>
   private VideoPipelineProxy: VideoPipelineProxy
+  private VideoPacketPipelineProxy: VideoPacketPipelineProxy
 
   // AVPlayer 各个线程间共享的数据
   private GlobalData: AVPlayerGlobalData
@@ -627,6 +636,8 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
   private ioloader2DemuxerChannel: MessageChannel
   private demuxer2VideoDecoderChannel: MessageChannel
+  private demuxer2VideoPacketChannel: MessageChannel
+  private videoPacket2VideoDecoderChannel: MessageChannel
   private demuxer2AudioDecoderChannel: MessageChannel
   private videoDecoder2VideoRenderChannel: MessageChannel
   private audioDecoder2AudioRenderChannel: MessageChannel
@@ -1216,6 +1227,9 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
       }
 
       if (this.videoDecoder2VideoRenderChannel) {
+        if (this.VideoPacketThread) {
+          await this.VideoPacketThread.resetTask(this.taskId)
+        }
         await this.VideoDecoderThread.resetTask(this.taskId)
         await this.VideoRenderThread.beforeSeek(this.taskId)
         await this.VideoRenderThread.syncSeekTime(
@@ -2244,10 +2258,12 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
       await AVPlayer.startVideoRenderPipeline(this.options.enableWorker)
       await this.createVideoDecoderThread(this.options.enableWorker)
+      if (this.options.enableVideoPacketPipeline) {
+        await this.createVideoPacketThread(this.options.enableWorker)
+      }
 
       videoStartTime = avRescaleQ(videoStream.startTime, videoStream.timeBase, AV_MILLI_TIME_BASE_Q)
 
-      this.demuxer2VideoDecoderChannel = createMessageChannel(this.options.enableWorker)
       this.videoDecoder2VideoRenderChannel = createMessageChannel(this.options.enableWorker)
 
       let resource = await this.getResource('decoder', videoStream.codecpar.codecId, videoStream.codecpar.codecType)
@@ -2265,42 +2281,99 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
         }
       }
 
-      // 注册一个视频解码任务
-      await this.VideoDecoderThread.registerTask
-        .transfer(this.demuxer2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1)
-        .invoke({
-          taskId: this.taskId,
-          resource,
-          leftPort: this.demuxer2VideoDecoderChannel.port2,
-          rightPort: this.videoDecoder2VideoRenderChannel.port1,
-          stats: addressof(this.GlobalData.stats),
-          enableHardware: this.options.enableHardware
-            && this.options.enableWebCodecs
-            && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
-          avpacketList: addressof(this.GlobalData.avpacketList),
-          avpacketListMutex: addressof(this.GlobalData.avpacketListMutex),
-          avframeList: addressof(this.GlobalData.avframeList),
-          avframeListMutex: addressof(this.GlobalData.avframeListMutex),
-          preferWebCodecs: !isHdr(videoStream.codecpar)
-            && (!hasAlphaChannel(videoStream.codecpar)
-              || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP8
-              || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP9
-              || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_AV1
-            )
-            && !!this.options.enableWebCodecs
-            && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
-          preferLatency: this.isLive(),
-          keepAlpha: true
-        })
+      if (this.options.enableVideoPacketPipeline) {
+        this.demuxer2VideoPacketChannel = createMessageChannel(this.options.enableWorker)
+        this.videoPacket2VideoDecoderChannel = createMessageChannel(this.options.enableWorker)
 
-      let ret = await this.VideoDecoderThread.open(this.taskId, serializeAVCodecParameters(videoStream.codecpar))
-      if (ret < 0) {
-        logger.fatal(`cannot open video ${dumpUtils.dumpCodecName(videoStream.codecpar.codecType, videoStream.codecpar.codecId)} decoder`)
+        // 注册一个视频 packet 任务（位于 demuxer 和 videoDecoder 之间）
+        await this.VideoPacketThread.registerTask
+          .transfer(this.demuxer2VideoPacketChannel.port2, this.videoPacket2VideoDecoderChannel.port1)
+          .invoke({
+            taskId: this.taskId,
+            leftPort: this.demuxer2VideoPacketChannel.port2,
+            rightPort: this.videoPacket2VideoDecoderChannel.port1,
+            stats: addressof(this.GlobalData.stats),
+            avpacketList: addressof(this.GlobalData.avpacketList),
+            avpacketListMutex: addressof(this.GlobalData.avpacketListMutex)
+          })
+
+        // 注册一个视频解码任务
+        await this.VideoDecoderThread.registerTask
+          .transfer(this.videoPacket2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1)
+          .invoke({
+            taskId: this.taskId,
+            resource,
+            leftPort: this.videoPacket2VideoDecoderChannel.port2,
+            rightPort: this.videoDecoder2VideoRenderChannel.port1,
+            stats: addressof(this.GlobalData.stats),
+            enableHardware: this.options.enableHardware
+              && this.options.enableWebCodecs
+              && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
+            avpacketList: addressof(this.GlobalData.avpacketList),
+            avpacketListMutex: addressof(this.GlobalData.avpacketListMutex),
+            avframeList: addressof(this.GlobalData.avframeList),
+            avframeListMutex: addressof(this.GlobalData.avframeListMutex),
+            preferWebCodecs: !isHdr(videoStream.codecpar)
+              && (!hasAlphaChannel(videoStream.codecpar)
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP8
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP9
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_AV1
+              )
+              && !!this.options.enableWebCodecs
+              && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
+            preferLatency: this.isLive(),
+            keepAlpha: true
+          })
+
+        let ret = await this.VideoDecoderThread.open(this.taskId, serializeAVCodecParameters(videoStream.codecpar))
+        if (ret < 0) {
+          logger.fatal(`cannot open video ${dumpUtils.dumpCodecName(videoStream.codecpar.codecType, videoStream.codecpar.codecId)} decoder`)
+        }
+
+        await AVPlayer.DemuxerThread.connectStreamTask
+          .transfer(this.demuxer2VideoPacketChannel.port1)
+          .invoke(this.subTaskId || this.taskId, videoStream.index, this.demuxer2VideoPacketChannel.port1)
       }
+      else {
+        this.demuxer2VideoDecoderChannel = createMessageChannel(this.options.enableWorker)
 
-      await AVPlayer.DemuxerThread.connectStreamTask
-        .transfer(this.demuxer2VideoDecoderChannel.port1)
-        .invoke(this.subTaskId || this.taskId, videoStream.index, this.demuxer2VideoDecoderChannel.port1)
+        // 注册一个视频解码任务
+        await this.VideoDecoderThread.registerTask
+          .transfer(this.demuxer2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1)
+          .invoke({
+            taskId: this.taskId,
+            resource,
+            leftPort: this.demuxer2VideoDecoderChannel.port2,
+            rightPort: this.videoDecoder2VideoRenderChannel.port1,
+            stats: addressof(this.GlobalData.stats),
+            enableHardware: this.options.enableHardware
+              && this.options.enableWebCodecs
+              && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
+            avpacketList: addressof(this.GlobalData.avpacketList),
+            avpacketListMutex: addressof(this.GlobalData.avpacketListMutex),
+            avframeList: addressof(this.GlobalData.avframeList),
+            avframeListMutex: addressof(this.GlobalData.avframeListMutex),
+            preferWebCodecs: !isHdr(videoStream.codecpar)
+              && (!hasAlphaChannel(videoStream.codecpar)
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP8
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_VP9
+                || videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_AV1
+              )
+              && !!this.options.enableWebCodecs
+              && !(videoStream.disposition & AVDisposition.ATTACHED_PIC),
+            preferLatency: this.isLive(),
+            keepAlpha: true
+          })
+
+        let ret = await this.VideoDecoderThread.open(this.taskId, serializeAVCodecParameters(videoStream.codecpar))
+        if (ret < 0) {
+          logger.fatal(`cannot open video ${dumpUtils.dumpCodecName(videoStream.codecpar.codecType, videoStream.codecpar.codecId)} decoder`)
+        }
+
+        await AVPlayer.DemuxerThread.connectStreamTask
+          .transfer(this.demuxer2VideoDecoderChannel.port1)
+          .invoke(this.subTaskId || this.taskId, videoStream.index, this.demuxer2VideoDecoderChannel.port1)
+      }
 
       this.VideoDecoderThread.setPlayRate(this.taskId, this.playRate)
     }
@@ -2960,6 +3033,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
       if (seekedTimestamp >= 0n) {
         await Promise.all([
           AVPlayer.AudioDecoderThread?.resetTask(this.taskId),
+          this.VideoPacketThread?.resetTask(this.taskId),
           this.VideoDecoderThread?.resetTask(this.taskId)
         ])
         await Promise.all([
@@ -3207,6 +3281,9 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
     if (this.VideoDecoderThread) {
       await this.VideoDecoderThread.unregisterTask(this.taskId)
     }
+    if (this.VideoPacketThread) {
+      await this.VideoPacketThread.unregisterTask(this.taskId)
+    }
     if (AVPlayer.AudioDecoderThread) {
       await AVPlayer.AudioDecoderThread.unregisterTask(this.taskId)
     }
@@ -3275,6 +3352,8 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
     this.ioloader2DemuxerChannel = null
     this.demuxer2VideoDecoderChannel = null
+    this.demuxer2VideoPacketChannel = null
+    this.videoPacket2VideoDecoderChannel = null
     this.demuxer2AudioDecoderChannel = null
     this.videoDecoder2VideoRenderChannel = null
     this.audioDecoder2AudioRenderChannel = null
@@ -4229,6 +4308,19 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
       this.VideoPipelineProxy = null
     }
 
+    if (this.VideoPacketPipelineProxy) {
+      await this.VideoPacketThread?.clear()
+      await this.VideoPacketPipelineProxy.destroy()
+      this.VideoPacketThread = null
+      this.VideoPacketPipelineProxy = null
+    }
+
+    if (this.VideoPacketThread) {
+      await this.VideoPacketThread.clear()
+      closeThread(this.VideoPacketThread)
+      this.VideoPacketThread = null
+    }
+
     if (this.VideoDecoderThread) {
       await this.VideoDecoderThread.clear()
       closeThread(this.VideoDecoderThread)
@@ -4437,6 +4529,37 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
       this.VideoDecoderThread = this.VideoPipelineProxy.VideoDecodePipeline as Thread<VideoDecodePipeline>
       this.VideoRenderThread = this.VideoPipelineProxy.VideoRenderPipeline as Thread<VideoRenderPipeline>
     }
+  }
+
+  private async createVideoPacketThread(enableWorker: boolean = true) {
+
+    if (this.VideoPacketThread) {
+      return
+    }
+
+    if (cheapConfig.USE_THREADS
+      || !support.worker
+      || !enableWorker
+      || !defined(ENABLE_WORKER_PROXY)
+    ) {
+      this.VideoPacketThread = await createThreadFromClass(VideoPacketPipeline, {
+        name: 'VideoPacketThread'
+      }).run()
+      this.VideoPacketThread.setLogLevel(AVPlayer.level)
+    }
+    else {
+      this.VideoPacketPipelineProxy = new VideoPacketPipelineProxy()
+      await this.VideoPacketPipelineProxy.run()
+      this.VideoPacketPipelineProxy.setLogLevel(AVPlayer.level)
+      this.VideoPacketThread = this.VideoPacketPipelineProxy.VideoPacketPipeline as Thread<VideoPacketPipeline>
+    }
+  }
+
+  /**
+   * 获取视频 packet pipeline 线程
+   */
+  public getVideoPacketThread() {
+    return this.VideoPacketThread
   }
 
   /**

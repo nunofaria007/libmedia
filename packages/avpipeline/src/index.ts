@@ -51,6 +51,11 @@ export {
   default as VideoRenderPipeline
 } from './VideoRenderPipeline'
 
+export {
+  type VideoPacketTaskOptions,
+  default as VideoPacketPipeline
+} from './VideoPacketPipeline'
+
 export { type AlphaVideoFrame } from './struct/type'
 export {
   JitterBuffer,

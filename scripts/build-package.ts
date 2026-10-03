@@ -14,6 +14,37 @@ import type {
   afterDeclarations as TransformerAfterDeclarations
 } from '../packages/cheap/build/transformer'
 
+import webpack from 'webpack'
+import webpackConfigFn from '../webpack.config'
+
+// Helper to run webpack cleanly inside your script
+async function compileWebpack(envArgs): Promise<void> {
+  const config = await webpackConfigFn(envArgs, { mode: 'production' })
+
+  return new Promise((resolve, reject) => {
+    webpack(config, (err, stats) => {
+      if (err) {
+        console.error('Webpack fatal error:', err)
+        return reject(err)
+      }
+
+      console.log(stats.toString({
+        colors: true,
+        assets: true,
+        timings: true,
+        errors: true,
+        warnings: true
+      }))
+
+      if (stats.hasErrors()) {
+        return reject(new Error('Webpack compilation failed with errors.'))
+      }
+
+      resolve()
+    })
+  })
+}
+
 interface MyArgs {
   package: string
 }
@@ -915,18 +946,26 @@ async function buildAvplayer() {
   fs.rmSync(path.resolve(__dirname, '../packages/avplayer/dist'), { recursive: true, force: true })
   process.env.NODE_ENV = 'production'
 
+  // 1. Build UMD Bundle
   printTaskLog(1, 'AVPlayer', 'START', 'built umd AVPlayer starting')
-  spawnSync('npx', ['tsx', `${path.resolve(__dirname, '../')}/node_modules/webpack/bin/webpack.js`, '--progress', '--env', 'avplayer=1', 'release=1', `dist=${path.resolve(__dirname, '../packages/avplayer/dist/umd')}`], {
-    stdio: 'ignore'
+  await compileWebpack({
+    avplayer: true,
+    release: true,
+    dist: path.resolve(__dirname, '../packages/avplayer/dist/umd')
   })
   printTaskLog(1, 'AVPlayer', 'SUCCESS', 'built umd AVPlayer completed')
 
+  // 2. Build ESM Bundle
   printTaskLog(1, 'AVPlayer', 'START', 'built esm AVPlayer starting')
-  spawnSync('npx', ['tsx', `${path.resolve(__dirname, '../')}/node_modules/webpack/bin/webpack.js`, '--progress', '--env', 'avplayer=1', 'release=1', 'esm=1', `dist=${path.resolve(__dirname, '../packages/avplayer/dist/esm')}`], {
-    stdio: 'ignore'
+  await compileWebpack({
+    avplayer: true,
+    release: true,
+    esm: true,
+    dist: path.resolve(__dirname, '../packages/avplayer/dist/esm')
   })
   printTaskLog(1, 'AVPlayer', 'SUCCESS', 'built esm AVPlayer completed')
 
+  // 3. Build TypeScript Definitions (.d.ts)
   printTaskLog(1, 'AVPlayer', 'START', 'built AVPlayer.d.ts starting')
   const parsedCommandLine = parseCommandLine(path.resolve(__dirname, '../packages/avplayer/tsconfig.d.json'))
   await compile(parsedCommandLine.fileNames, parsedCommandLine.options, (fileName, data) => {
