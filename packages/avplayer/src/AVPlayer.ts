@@ -1,20 +1,20 @@
 /*
  * libmedia AVPlayer
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -184,15 +184,15 @@ const ObjectFitMap = {
 
 export interface ExternalSubtitle {
   /**
-   * 字幕源，支持 url 和 文件
+   * 字幕源，支持 url 和 文件 
    */
   source: string | File
   /**
-   * 字幕语言
+   * 字幕语言 
    */
   lang?: string
   /**
-   * 字幕标题
+   * 字幕标题 
    */
   title?: string
 }
@@ -205,11 +205,11 @@ interface ExternalSubtitleTask extends ExternalSubtitle {
 
 export interface DRMSystemOptions {
   /**
-   * 音频 drm 级别
+   * 音频 drm 级别 
    */
   audioRobustness?: string
   /**
-   * 视频 drm 级别
+   * 视频 drm 级别 
    */
   videoRobustness?: string
   /**
@@ -221,20 +221,20 @@ export interface DRMSystemOptions {
    */
   header?: Data
   /**
-   * license 请求方法
+   * license 请求方法 
    */
   method?: string
   /**
-   * 设置 license server 公钥
+   * 设置 license server 公钥 
    */
   certificate?: BufferSource
   /**
-   * 自定义 license 请求
+   * 自定义 license 请求 
    * 
-   * @param drmSystemKey drm 系统
-   * @param messageType 请求类型
+   * @param drmSystemKey drm 系统 
+   * @param messageType 请求类型 
    * @param message 请求 body
-   * @param url 附加的 license url（比如 dash 清单里面带有的 url）ClearKey 有这种场景
+   * @param url 附加的 license url（比如 dash 清单里面带有的 url）ClearKey 有这种场景 
    * @returns 
    */
   onRequest?: (
@@ -247,9 +247,9 @@ export interface DRMSystemOptions {
 
 export interface AVPlayerOptions {
   /**
-   * dom 挂载元素
+   * dom 挂载元素 
    * 
-   * 也可以传一个 MediaStream 容器，AVPlayer 会将音视频写入 MediaStreamTrack 放入 MediaStream 可用于 webrtc 等应用
+   * 也可以传一个 MediaStream 容器，AVPlayer 会将音视频写入 MediaStreamTrack 放入 MediaStream 可用于 webrtc 等应用 
    */
   container: HTMLDivElement | MediaStream
   /**
@@ -259,7 +259,7 @@ export interface AVPlayerOptions {
    */
   wasmBaseUrl?: string
   /**
-   * 获取 wasm 回调
+   * 获取 wasm 回调 
    * 
    * @param type 
    * @param codecId 
@@ -273,23 +273,23 @@ export interface AVPlayerOptions {
    */
   isLive?: boolean
   /**
-   * 自定义检查是否使用 mse 模式
+   * 自定义检查是否使用 mse 模式 
    */
   checkUseMSE?: (streams: AVStreamInterface[]) => boolean
   /**
-   * 是否启用硬件加速
+   * 是否启用硬件加速 
    */
   enableHardware?: boolean
   /**
-   * 是否启用 WebGPU 渲染
+   * 是否启用 WebGPU 渲染 
    */
   enableWebGPU?: boolean
   /**
-   * 是否启用 WebCodecs 编解码
+   * 是否启用 WebCodecs 编解码 
    */
   enableWebCodecs?: boolean
   /**
-   * 是否启用 worker，非多线程环境下使用
+   * 是否启用 worker，非多线程环境下使用 
    * 
    * 启用之后在非多线程下，io 和 demux 一个 worker；音频解码渲染一个 worker；视频解码渲染一个 worker
    */
@@ -299,7 +299,7 @@ export interface AVPlayerOptions {
    */
   enableAudioWorklet?: boolean
   /**
-   * 是否循环播放
+   * 是否循环播放 
    */
   loop?: boolean
   /**
@@ -311,7 +311,7 @@ export interface AVPlayerOptions {
    */
   enableVideoPacketPipeline?: boolean
   /**
-   * 是否开启低延时模式（直播）开启之后会根据网络情况自动调整 buffer，尽量在不卡顿的情况下降低延时
+   * 是否开启低延时模式（直播）开启之后会根据网络情况自动调整 buffer，尽量在不卡顿的情况下降低延时 
    */
   lowLatency?: boolean
   /**
@@ -327,30 +327,30 @@ export interface AVPlayerOptions {
    */
   preLoadTime?: float
   /**
-   * 自定义查找播放流回调
+   * 自定义查找播放流回调 
    */
   findBestStream?: (streams: AVStreamInterface[], mediaType: AVMediaType) => AVStreamInterface
   /**
-   * 配置 audioWorklet 的缓冲区大小，以 128 采样为单位
-   * 某些机器上 audioWorklet 线程与其他线程通信延迟较大会导致音频播放卡顿，此时可以调大这个
+   * 配置 audioWorklet 的缓冲区大小，以 128 采样为单位 
+   * 某些机器上 audioWorklet 线程与其他线程通信延迟较大会导致音频播放卡顿，此时可以调大这个 
    * 
    * 默认 桌面端 10 移动端 20
    */
   audioWorkletBufferLength?: int32
   /**
-   * DRM 配置
+   * DRM 配置 
    */
   drmSystemOptions?: DRMSystemOptions
 }
 
 export interface AVPlayerLoadOptions {
   /**
-   * 源扩展名
-   * 强制指定扩展名，对没有扩展名的 url 链接使用
+   * 源扩展名 
+   * 强制指定扩展名，对没有扩展名的 url 链接使用 
    */
   ext?: string
   /**
-   * 需要一起加载的外挂字幕
+   * 需要一起加载的外挂字幕 
    */
   externalSubtitles?: ExternalSubtitle[]
   /**
@@ -371,51 +371,51 @@ export interface AVPlayerLoadOptions {
     referrerPolicy?: ReferrerPolicy
   }
   /**
-   * websocket 配置
+   * websocket 配置 
    */
   websocket?: WebSocketOptions
   /**
-   * webtransport 配置
+   * webtransport 配置 
    */
   webtransport?: WebTransportOptions
   /**
-   * 如果 source 是被 Websocket 或者 WebTransport 代理的，这里传源地址
-   * 像 rtmp 需要使用到这个源地址
+   * 如果 source 是被 Websocket 或者 WebTransport 代理的，这里传源地址 
+   * 像 rtmp 需要使用到这个源地址 
    */
   uri?: string
   /**
-   * 透传给 format 的参数
+   * 透传给 format 的参数 
    */
   formatOptions?: Data
   /**
-   * 设置源是否是直播，覆盖 AVPlayerOptions 里面的配置
+   * 设置源是否是直播，覆盖 AVPlayerOptions 里面的配置 
    */
   isLive?: boolean
   /**
-   * ioLoader 配置参数
+   * ioLoader 配置参数 
    */
   ioLoaderOptions?: Omit<IOLoaderOptions, 'isLive'>
   /**
-   * 最大分析时长（秒）用于分析流参数的最大时长，默认 3 秒
+   * 最大分析时长（秒）用于分析流参数的最大时长，默认 3 秒 
    */
   maxProbeDuration?: number
 }
 
 export interface AVPlayerPlayOptions {
   /**
-   * 是否播放音频
+   * 是否播放音频 
    */
   audio?: boolean
   /**
-   * 是否播放视频
+   * 是否播放视频 
    */
   video?: boolean
   /**
-   * 是否播放字幕
+   * 是否播放字幕 
    */
   subtitle?: boolean
   /**
-   * 强制使用音频作为主时间同步
+   * 强制使用音频作为主时间同步 
    */
   audioMasterForce?: boolean
 }
@@ -584,7 +584,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
   /**
    * @hidden
-   * 下面的线程所有 AVPlayer 实例共享
+   * 下面的线程所有 AVPlayer 实例共享 
    */
   static IOThread: Thread<IOPipeline>
   /**
@@ -1288,7 +1288,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取最小开始时间
+   * 获取最小开始时间 
    * 
    * @returns 
    */
@@ -1393,7 +1393,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 加载外挂字幕
+   * 加载外挂字幕 
    * 
    * @param externalSubtitle 
    * @returns 
@@ -1543,10 +1543,10 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 加载媒体源，分析流信息
+   * 加载媒体源，分析流信息 
    * 
    * @param source 媒体源，支持 url、File 和自定义 CustomIOLoader
-   * @param options 配置项
+   * @param options 配置项 
    */
   public async load(source: string | File | CustomIOLoader, options: AVPlayerLoadOptions = {}) {
 
@@ -2294,7 +2294,8 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
             rightPort: this.videoPacket2VideoDecoderChannel.port1,
             stats: addressof(this.GlobalData.stats),
             avpacketList: addressof(this.GlobalData.avpacketList),
-            avpacketListMutex: addressof(this.GlobalData.avpacketListMutex)
+            avpacketListMutex: addressof(this.GlobalData.avpacketListMutex),
+            isH264AnnexB: videoStream.codecpar.codecId === AVCodecID.AV_CODEC_ID_H264 && !!(videoStream.codecpar.flags & AVCodecParameterFlags.AV_CODECPAR_FLAG_H26X_ANNEXB)
           })
 
         // 注册一个视频解码任务
@@ -2678,7 +2679,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 播放
+   * 播放 
    * 
    * @param options 
    * @returns 
@@ -2913,7 +2914,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 暂停播放
+   * 暂停播放 
    */
   public async pause() {
 
@@ -3087,9 +3088,9 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
   /**
    * 跳转到指定时间戳位置播放（只支持点播）
-   * 某些文件可能不会 seek 成功
+   * 某些文件可能不会 seek 成功 
    * 
-   * @param timestamp 毫秒
+   * @param timestamp 毫秒 
    */
   public async seek(timestamp: int64) {
 
@@ -3137,7 +3138,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取流信息
+   * 获取流信息 
    * 
    * @returns 
    */
@@ -3146,7 +3147,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
       return {
         ...stream,
         /**
-         * 媒体类型
+         * 媒体类型 
          */
         mediaType: dumpUtils.dumpKey(mediaType2AVMediaType, stream.codecpar.codecType),
         codecparProxy: accessof(stream.codecpar)
@@ -3191,7 +3192,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取章节信息
+   * 获取章节信息 
    * 
    * @returns 
    */
@@ -3230,7 +3231,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 停止播放
+   * 停止播放 
    * 
    * @returns 
    */
@@ -3419,7 +3420,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取倍数值
+   * 获取倍数值 
    * 
    * @returns 
    */
@@ -3428,7 +3429,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * resume 音频
+   * resume 音频 
    */
   public async resume() {
     if (AVPlayer.audioContext?.state === 'suspended'
@@ -3468,7 +3469,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
     logger.info(`call resume, taskId: ${this.taskId}`)
   }
   /**
-   * audioContext 是否是 suspended 状态
+   * audioContext 是否是 suspended 状态 
    */
   public isSuspended() {
     return AVPlayer.audioContext?.state === 'suspended'
@@ -3477,7 +3478,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取播放音量
+   * 获取播放音量 
    * 
    * @returns 
    */
@@ -3486,7 +3487,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置播放音量
+   * 设置播放音量 
    * 
    * @param volume [0, 3]
    * 
@@ -3522,7 +3523,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
   /**
    * 
-   * 获取渲染模式
+   * 获取渲染模式 
    * 
    * @param mode 
    * @returns 
@@ -3532,10 +3533,10 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置画面填充模式
+   * 设置画面填充模式 
    * 
-   * - 0 自适应
-   * - 1 填充
+   * - 0 自适应 
+   * - 1 填充 
    * 
    * @param mode 
    */
@@ -3565,7 +3566,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置视频渲染旋转角度
+   * 设置视频渲染旋转角度 
    * 
    * @param angle 
    */
@@ -3603,7 +3604,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置是否循环播放
+   * 设置是否循环播放 
    * 
    * @param enable 
    */
@@ -3643,7 +3644,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置是否开启字幕显示
+   * 设置是否开启字幕显示 
    * 
    * @param enable 
    */
@@ -3666,7 +3667,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 重置渲染视图大小
+   * 重置渲染视图大小 
    * 
    * @param width 
    * @param height 
@@ -3679,7 +3680,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 当前是否是 mse 播放模式
+   * 当前是否是 mse 播放模式 
    * 
    * @returns 
    */
@@ -3688,14 +3689,14 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 是否是 MediaStream 模式
+   * 是否是 MediaStream 模式 
    */
   public isMediaStreamMode() {
     return typeof MediaStream === 'function' && this.options.container instanceof MediaStream
   }
 
   /**
-   * 当前是否是 live 模式
+   * 当前是否是 live 模式 
    * 
    * @returns 
    */
@@ -3731,7 +3732,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取 status 状态
+   * 获取 status 状态 
    * 
    * @returns 
    */
@@ -3740,7 +3741,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 是否播放了音频
+   * 是否播放了音频 
    * 
    * @returns 
    */
@@ -3749,7 +3750,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 是否播放了视频
+   * 是否播放了视频 
    * 
    * @returns 
    */
@@ -3758,7 +3759,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 是否播放了字幕
+   * 是否播放了字幕 
    * 
    * @returns 
    */
@@ -3767,7 +3768,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取当前的播放源
+   * 获取当前的播放源 
    * 
    * @returns 
    */
@@ -3776,7 +3777,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取 formatContext 对象
+   * 获取 formatContext 对象 
    * 
    * @returns 
    */
@@ -3785,7 +3786,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取当前加载的外挂字幕
+   * 获取当前加载的外挂字幕 
    * 
    * @returns 
    */
@@ -3809,14 +3810,14 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取 audioContext 声音输出 Node，可拿给外部去处理
+   * 获取 audioContext 声音输出 Node，可拿给外部去处理 
    */
   public getAudioOutputNode(): AudioNode {
     return this.gainNode
   }
 
   /**
-   * 判断是否处于画中画状态
+   * 判断是否处于画中画状态 
    * 
    * @returns 
    */
@@ -3832,7 +3833,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置播放视频轨道
+   * 设置播放视频轨道 
    * 
    * @param id 流 id，dash 和 hls 传 getVideoList 列表中的 index
    * @param smooth 平滑切换（hls 和 dash 使用，切换下一个加载的切片）
@@ -3969,7 +3970,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置播放音频轨道
+   * 设置播放音频轨道 
    * 
    * @param id 流 id，dash 和 hls 传 getAudioList 列表中的 index
    * @param smooth 平滑切换（hls 和 dash 使用，切换下一个加载的切片）
@@ -4118,7 +4119,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置播放字幕轨道
+   * 设置播放字幕轨道 
    * 
    * @param id 流 id，dash 和 hls 传 getSubtitleList 列表中的 index
    * @returns 
@@ -4217,7 +4218,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 全屏
+   * 全屏 
    */
   public enterFullscreen() {
     if (this.isMediaStreamMode()) {
@@ -4240,7 +4241,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 退出全屏
+   * 退出全屏 
    */
   public exitFullscreen() {
     if (document.exitFullscreen) {
@@ -4256,10 +4257,10 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取截图
+   * 获取截图 
    * 
-   * @param type 生成图片格式
-   * @param quality 生成图片质量
+   * @param type 生成图片格式 
+   * @param quality 生成图片质量 
    */
   public snapshot(type: 'png' | 'jpeg' | 'webp' = 'png', quality: number = 1) {
     if (defined(ENABLE_MSE) && this.useMSE && this.video) {
@@ -4276,7 +4277,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取统计数据
+   * 获取统计数据 
    * 
    * @returns 
    */
@@ -4285,7 +4286,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 销毁播放器
+   * 销毁播放器 
    * 
    * @returns 
    */
@@ -4556,7 +4557,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 获取视频 packet pipeline 线程
+   * 获取视频 packet pipeline 线程 
    */
   public getVideoPacketThread() {
     return this.VideoPacketThread
@@ -4711,7 +4712,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 提前运行所有管线
+   * 提前运行所有管线 
    */
   static async startPipelines(enableWorker: boolean = true) {
     await AVPlayer.startDemuxPipeline(enableWorker)
@@ -4722,7 +4723,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 停止所有管线
+   * 停止所有管线 
    */
   static async stopPipelines() {
     if (AVPlayer.VideoRenderThread) {
@@ -4793,7 +4794,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   }
 
   /**
-   * 设置日志等级
+   * 设置日志等级 
    * 
    * @param level 
    */

@@ -58,9 +58,11 @@ import Pipeline from './Pipeline'
 export interface VideoPacketTaskOptions extends TaskOptions {
   avpacketList?: pointer<List<pointer<AVPacketRef>>>
   avpacketListMutex?: pointer<Mutex>
+  isH264AnnexB?: boolean
 }
 
 type SelfTask = VideoPacketTaskOptions & {
+  packetLogged?: boolean,
   leftIPCPort: IPCPort
   rightIPCPort: IPCPort
   avpacketPool?: AVPacketPool
@@ -183,6 +185,16 @@ export default class VideoPacketPipeline extends Pipeline {
     task: SelfTask,
     packet: pointer<AVPacketRef> | AVPacketSerialize
   ): Promise<pointer<AVPacketRef> | AVPacketSerialize | null> {
+    if (!task.packetLogged) {
+      task.packetLogged = true
+      logger.info( `VideoPacketPipeline first packet: ${isPointer(packet) ? 'pointer<AVPacketRef>' : 'AVPacketSerialize'}, `
+      + `annexB H.264: ${!!task.isH264AnnexB} (${task.isH264AnnexB ? 'processing enabled' : 'passthrough'}), `
+      + `taskId: ${task.taskId}`)
+    }
+    if (!task.isH264AnnexB) {
+      return packet
+    }
+
     return packet
   }
 
