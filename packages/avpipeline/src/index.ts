@@ -61,3 +61,5 @@ export {
   JitterBuffer,
   default as Stats
 } from './struct/stats'
+
+export * as h264fix from './h264fix'

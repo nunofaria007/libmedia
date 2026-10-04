@@ -34,7 +34,9 @@ import {
   type AVPacketSerialize,
   type AVPacketRef,
   type AVPacketPool,
-  AVPacketPoolImpl
+  AVPacketPoolImpl,
+  AVPacketFlags,
+  NOPTS_VALUE_BIGINT
 } from '@libmedia/avutil'
 
 import {
@@ -55,10 +57,21 @@ import {
 import type { TaskOptions } from './Pipeline'
 import Pipeline from './Pipeline'
 
+import {
+  FixPipeline,
+  AccessUnit,
+  splitAnnexB,
+  nalType,
+  sliceInfo,
+  hasRecoverySei,
+  type OutputChunk
+} from './h264fix'
+
 export interface VideoPacketTaskOptions extends TaskOptions {
   avpacketList?: pointer<List<pointer<AVPacketRef>>>
   avpacketListMutex?: pointer<Mutex>
   isH264AnnexB?: boolean
+  fixes?: Record<string, boolean>
 }
 
 type SelfTask = VideoPacketTaskOptions & {
@@ -67,6 +80,9 @@ type SelfTask = VideoPacketTaskOptions & {
   rightIPCPort: IPCPort
   avpacketPool?: AVPacketPool
   packetCaches: (pointer<AVPacketRef> | AVPacketSerialize)[]
+  h264FixPipeline?: FixPipeline
+  heldPacket?: AVPacketSerialize | null
+  outputChunks: OutputChunk[]
 }
 
 export default class VideoPacketPipeline extends Pipeline {
@@ -84,11 +100,31 @@ export default class VideoPacketPipeline extends Pipeline {
     const leftIPCPort = new IPCPort(options.leftPort)
     const rightIPCPort = new IPCPort(options.rightPort)
 
+    const outputChunks: OutputChunk[] = []
     const task: SelfTask = {
       ...options,
       leftIPCPort,
       rightIPCPort,
-      packetCaches: []
+      packetCaches: [],
+      outputChunks,
+      heldPacket: null
+    }
+
+    if (options.isH264AnnexB) {
+      // By default, enable the 3 must-have fixes: fieldPair, idrConvert, mmco
+      const defaultFixes: Record<string, boolean> = {
+        fieldPair: true,
+        idrConvert: true,
+        mmco: true
+      }
+      const fixes = options.fixes ? { ...defaultFixes, ...options.fixes } : defaultFixes
+      task.h264FixPipeline = new FixPipeline({
+        fixes,
+        log: (msg) => logger.info(`[VideoPacketPipeline h264fix] ${msg}`),
+        onUnit: (chunk) => {
+          task.outputChunks.push(chunk)
+        }
+      })
     }
 
     if (options.avpacketList && options.avpacketListMutex) {
@@ -174,8 +210,8 @@ export default class VideoPacketPipeline extends Pipeline {
 
   /**
    * Extensible packet processing hook.
-   * Acts as a passthrough by default for testing.
-   * Can be overridden to inspect, filter, modify, or drop packets.
+   * Applies h264 fixes (fieldPair, idrConvert, mmco) to serialized packets.
+   * If packet is pointer<AVPacketRef>, passes through as-is for the wasm decoder.
    * 
    * @param task Current task
    * @param packet The packet from Demuxer (pointer or serialized object)
@@ -191,11 +227,83 @@ export default class VideoPacketPipeline extends Pipeline {
       + `annexB H.264: ${!!task.isH264AnnexB} (${task.isH264AnnexB ? 'processing enabled' : 'passthrough'}), `
       + `taskId: ${task.taskId}`)
     }
-    if (!task.isH264AnnexB) {
+
+    // Ignore pointer<AVPacketRef>, pass through as-is for ffmpeg wasm decoder
+    if (isPointer(packet) || !task.isH264AnnexB || !task.h264FixPipeline) {
       return packet
     }
 
-    return packet
+    const serialized = packet as AVPacketSerialize
+    if (!serialized.data || serialized.data.length === 0) {
+      return packet
+    }
+
+    const nals = splitAnnexB(serialized.data)
+    if (!nals.length) {
+      return packet
+    }
+
+    const au = new AccessUnit()
+    au.nals = nals
+    au.pts = serialized.pts !== NOPTS_VALUE_BIGINT ? Number(serialized.pts) : undefined
+
+    for (const n of nals) {
+      const t = nalType(n)
+      if (t === 6 && hasRecoverySei(n)) {
+        au.rp = true
+      }
+      if ((t === 1 || t === 5) && !au.vcl) {
+        au.vcl = true
+        au.vclNal = n
+        au.idr = t === 5
+        try {
+          const si = sliceInfo(n)
+          au.isI = si.type === 2 || si.type === 4
+        }
+        catch (e) {
+          // ignore error
+        }
+      }
+    }
+
+    task.outputChunks = []
+    task.h264FixPipeline.push(au)
+
+    const prevHeldPacket = task.heldPacket
+    if (task.h264FixPipeline.hasHeld) {
+      task.heldPacket = serialized
+    }
+    else {
+      task.heldPacket = null
+    }
+
+    if (task.outputChunks.length === 0) {
+      return null
+    }
+
+    const firstChunk = task.outputChunks[0]
+    const basePacket = prevHeldPacket || serialized
+
+    basePacket.data = firstChunk.data
+    if (firstChunk.key || firstChunk.idr) {
+      basePacket.flags |= AVPacketFlags.AV_PKT_FLAG_KEY
+    }
+
+    if (task.outputChunks.length > 1) {
+      for (let i = 1; i < task.outputChunks.length; i++) {
+        const extraChunk = task.outputChunks[i]
+        const extraPacket: AVPacketSerialize = {
+          ...serialized,
+          data: extraChunk.data,
+          flags: (extraChunk.key || extraChunk.idr)
+            ? (serialized.flags | AVPacketFlags.AV_PKT_FLAG_KEY)
+            : serialized.flags
+        }
+        task.packetCaches.push(extraPacket)
+      }
+    }
+
+    return basePacket
   }
 
   private replyPacket(task: SelfTask, request: RpcMessage, packet: pointer<AVPacketRef> | AVPacketSerialize | number) {
@@ -235,6 +343,11 @@ export default class VideoPacketPipeline extends Pipeline {
         })
         task.packetCaches.length = 0
       }
+      if (task.h264FixPipeline) {
+        task.h264FixPipeline.restart()
+      }
+      task.heldPacket = null
+      task.outputChunks = []
     }
   }
 
