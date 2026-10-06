@@ -46,6 +46,8 @@ export interface OutputChunk {
   idr: boolean;
   pts: number | undefined; // 90 kHz
   au: AccessUnit;
+  /** False when `data` carries exactly the NAL units of the input (the caller may keep its original bytes); true after pairing, rewriting or inserting NALs. */
+  changed: boolean;
 }
 
 export interface StartInfo {
@@ -233,7 +235,8 @@ export class FixPipeline {
     if (info.needParams && !(chunk.hasSps && chunk.hasPps)) this.report.keyWithoutParams++;
     for (const f of this.fixes) if (f.enabled && f.finishChunk) f.finishChunk(chunk, info, this);
     if (au.pts === undefined) this.report.noPts++;
-    this.onUnit({ data: chunk.toBytes(), key: isKey, idr: outAu.idr, pts: au.pts, au: outAu });
+    const changed = outAu.rewritten || chunk.nals.length !== au.nals.length || chunk.nals.some((n, i) => n !== au.nals[i]);
+    this.onUnit({ data: chunk.toBytes(), key: isKey, idr: outAu.idr, pts: au.pts, au: outAu, changed });
   }
 
   /** Everything the UI needs: what is wrong with the stream and what each fix did. */

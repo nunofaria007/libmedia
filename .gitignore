@@ -21,3 +21,4 @@ media/*
 media
 
 packages/**/dist/
+.1devtool/tasks.config.json

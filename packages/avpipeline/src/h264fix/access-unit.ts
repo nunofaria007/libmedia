@@ -13,12 +13,15 @@ export class AccessUnit {
   pts: number | undefined = undefined;   // 90 kHz PES timestamp
   vclNal: Nal | null = null;         // first slice NAL
   field = 0; bottom = 0; frameNum = 0;   // filled in by FixPipeline
+  /** True for access units made by `withNals` (merged fields, rewritten slices): their NAL list is not what the stream carried. */
+  rewritten = false;
 
   get isKey(): boolean { return this.idr || this.isI; }
   /** Copy with a different NAL list (access units are never modified in place by the pipeline). */
   withNals(nals: Nal[]): AccessUnit {
     const a = Object.assign(new AccessUnit(), this);
     a.nals = nals;
+    a.rewritten = true;
     return a;
   }
 }
