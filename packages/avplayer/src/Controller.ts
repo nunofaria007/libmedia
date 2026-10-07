@@ -1,20 +1,20 @@
 /*
  * libmedia AVPlayer Controller
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -53,14 +53,17 @@ export interface ControllerObserver {
   isPictureInPicture: () => boolean
   isMediaStreamMode: () => boolean
   onError: (error: Error) => void
+  onDecoderChange: (decoder: string, isFallback: boolean) => void
 }
 
 export default class Controller {
+  private videoDecoderControlChannel: MessageChannel
   private videoRenderControlChannel: MessageChannel
   private audioRenderControlChannel: MessageChannel
   private muxerControlChannel: MessageChannel
   private demuxerControlChannel: MessageChannel
 
+  private videoDecoderControlIPCPort: IPCPort
   private videoRenderControlIPCPort: IPCPort
   private audioRenderControlIPCPort: IPCPort
   private muxerControlIPCPort: IPCPort
@@ -75,16 +78,26 @@ export default class Controller {
 
   constructor(observer: ControllerObserver, enableWorker: boolean) {
     this.observer = observer
+    this.videoDecoderControlChannel = createMessageChannel(enableWorker)
     this.videoRenderControlChannel = createMessageChannel(enableWorker)
     this.audioRenderControlChannel = createMessageChannel(enableWorker)
     this.muxerControlChannel = createMessageChannel(enableWorker)
     this.demuxerControlChannel = createMessageChannel(enableWorker)
 
+    this.videoDecoderControlIPCPort = new IPCPort(this.videoDecoderControlChannel.port2)
     this.videoRenderControlIPCPort = new IPCPort(this.videoRenderControlChannel.port2)
     this.audioRenderControlIPCPort = new IPCPort(this.audioRenderControlChannel.port2)
     this.muxerControlIPCPort = new IPCPort(this.muxerControlChannel.port2)
     this.demuxerControlIPCPort = new IPCPort(this.demuxerControlChannel.port2)
     this.enableAudioVideoSync = true
+
+    this.videoDecoderControlIPCPort.on(NOTIFY, (request: RpcMessage) => {
+      switch (request.method) {
+        case 'decoderChange':
+          this.observer.onDecoderChange(request.params.decoder, request.params.isFallback)
+          break
+      }
+    })
 
     this.videoRenderControlIPCPort.on(NOTIFY, (request: RpcMessage) => {
       switch (request.method) {
@@ -169,6 +182,10 @@ export default class Controller {
     })
   }
 
+  public getVideoDecoderControlPort() {
+    return this.videoDecoderControlChannel.port1
+  }
+
   public getVideoRenderControlPort() {
     return this.videoRenderControlChannel.port1
   }
@@ -194,6 +211,9 @@ export default class Controller {
   }
 
   public destroy() {
+    if (this.videoDecoderControlIPCPort) {
+      this.videoDecoderControlIPCPort.destroy()
+    }
     if (this.videoRenderControlIPCPort) {
       this.videoRenderControlIPCPort.destroy()
     }
@@ -212,7 +232,8 @@ export default class Controller {
       this.onVisibilityChange = null
     }
 
-    this.videoRenderControlIPCPort
+    this.videoDecoderControlIPCPort
+      = this.videoRenderControlIPCPort
       = this.audioRenderControlIPCPort
       = this.muxerControlIPCPort
       = this.videoRenderControlChannel

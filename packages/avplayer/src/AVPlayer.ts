@@ -163,7 +163,7 @@ import getMediaSource from './function/getMediaSource'
 import JitterBufferController from './JitterBufferController'
 import type SubtitleRender from './subtitle/SubtitleRender'
 import type { playerEventChanged, playerEventChanging, playerEventError, playerEventNoParam,
-  playerEventProgress, playerEventSubtitleDelayChange, playerEventTime, playerEventVolumeChange
+  playerEventProgress, playerEventSubtitleDelayChange, playerEventTime, playerEventVolumeChange, playerDecoderChange
 } from './type'
 import type { AVPlayerGlobalData } from './struct'
 import IODemuxPipelineProxy from './worker/IODemuxPipelineProxy'
@@ -552,7 +552,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
     WebTransportIOLoader
   }
 
-  static level: number = logger.INFO
+  static level: number = logger.DEBUG
   /**
    * @hidden
    */
@@ -2300,12 +2300,13 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
         // 注册一个视频解码任务
         await this.VideoDecoderThread.registerTask
-          .transfer(this.videoPacket2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1)
+          .transfer(this.videoPacket2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1, this.controller.getVideoDecoderControlPort())
           .invoke({
             taskId: this.taskId,
             resource,
             leftPort: this.videoPacket2VideoDecoderChannel.port2,
             rightPort: this.videoDecoder2VideoRenderChannel.port1,
+            controlPort: this.controller.getVideoDecoderControlPort(),
             stats: addressof(this.GlobalData.stats),
             enableHardware: this.options.enableHardware
               && this.options.enableWebCodecs
@@ -2340,12 +2341,13 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
 
         // 注册一个视频解码任务
         await this.VideoDecoderThread.registerTask
-          .transfer(this.demuxer2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1)
+          .transfer(this.demuxer2VideoDecoderChannel.port2, this.videoDecoder2VideoRenderChannel.port1, this.controller.getVideoDecoderControlPort())
           .invoke({
             taskId: this.taskId,
             resource,
             leftPort: this.demuxer2VideoDecoderChannel.port2,
             rightPort: this.videoDecoder2VideoRenderChannel.port1,
+            controlPort: this.controller.getVideoDecoderControlPort(),
             stats: addressof(this.GlobalData.stats),
             enableHardware: this.options.enableHardware
               && this.options.enableWebCodecs
@@ -4505,6 +4507,13 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
     this.fire(eventType.ERROR, [error])
   }
 
+  /**
+   * @hidden
+   */
+  public onDecoderChange(decoder: string, isFallback: boolean) {
+    this.fire(eventType.DECODER_CHANGE, [decoder, isFallback])
+  }
+
   private async createVideoDecoderThread(enableWorker: boolean = true) {
 
     if (this.VideoDecoderThread) {
@@ -4846,6 +4855,7 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
   public on(event: typeof eventType.PROGRESS, listener: typeof playerEventProgress, options?: Partial<EmitterOptions>): AVPlayer
   public on(event: typeof eventType.VOLUME_CHANGE, listener: typeof playerEventVolumeChange, options?: Partial<EmitterOptions>): AVPlayer
   public on(event: typeof eventType.SUBTITLE_DELAY_CHANGE, listener: typeof playerEventSubtitleDelayChange, options?: Partial<EmitterOptions>): AVPlayer
+  public on(event: typeof eventType.DECODER_CHANGE, listener: typeof playerDecoderChange, options?: Partial<EmitterOptions>): AVPlayer
 
   public on(event: string, listener: Fn, options?: Partial<EmitterOptions>): AVPlayer
   public on(event: string, listener: Fn, options: Partial<EmitterOptions> = {}) {

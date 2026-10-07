@@ -1,20 +1,20 @@
 /*
  * libmedia VideoDecodePipeline
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -102,6 +102,7 @@ import type { AlphaVideoFrame } from './struct/type'
 import { isAlphaVideoFrame } from './util'
 
 import type { Data } from '@libmedia/common'
+import { bigint } from '../../common/src/util/is'
 
 export interface VideoDecodeTaskOptions extends TaskOptions {
   resource: ArrayBuffer | WebAssemblyResource
@@ -119,6 +120,7 @@ type SelfTask = Omit<VideoDecodeTaskOptions, 'resource'> & {
   resource: WebAssemblyResource
   leftIPCPort: IPCPort
   rightIPCPort: IPCPort
+  controlIPCPort: IPCPort
 
   softwareDecoder: WasmVideoDecoder | WebVideoDecoder
   softwareDecoderOpened: boolean
@@ -173,6 +175,9 @@ export default class VideoDecodePipeline extends Pipeline {
             task.hardwareDecoder.close()
             task.hardwareDecoder = null
             task.decoderFallbackReady = this.openSoftwareDecoder(task)
+
+            this.notifyDecoderChange(task, 'SW', true)
+
             logger.warn(`video decode error by hardware decoder(${task.hardwareRetryCount}), taskId: ${task.taskId}, error: ${error}, try to fallback to software decoder`)
           }
           else if (task.targetDecoder === task.softwareDecoder) {
@@ -180,6 +185,9 @@ export default class VideoDecodePipeline extends Pipeline {
             task.softwareDecoder = this.createWasmcodecDecoder(task, task.resource)
             task.softwareDecoderOpened = false
             task.decoderFallbackReady = this.openSoftwareDecoder(task)
+
+            this.notifyDecoderChange(task, 'WASM', true)
+
             logger.warn(`video decode error by software(webcodecs) decoder(${task.hardwareRetryCount}), taskId: ${task.taskId}, error: ${error}, try to fallback to software(wasm) decoder`)
           }
         }
@@ -249,13 +257,32 @@ export default class VideoDecodePipeline extends Pipeline {
     }
   }
 
+  private notifyDecoderChange(task: SelfTask, state?: 'HW' | 'WASM' | 'SW' | 'NONE', isFallback = false) {
+    if (state) {
+      task.controlIPCPort.notify('decoderChange', { 'decoder': state, isFallback })
+      return
+    }
+
+    if (task.targetDecoder === task.hardwareDecoder) {
+      task.controlIPCPort.notify('decoderChange', { 'decoder': 'HW', isFallback })
+    }
+    else if (task.softwareDecoder instanceof WasmVideoDecoder) {
+      task.controlIPCPort.notify('decoderChange', { 'decoder': 'WASM', isFallback })
+    }
+    else {
+      task.controlIPCPort.notify('decoderChange', { 'decoder': 'SW', isFallback })
+    }
+  }
+
   private async createTask(options: VideoDecodeTaskOptions): Promise<number> {
 
     assert(options.leftPort)
     assert(options.rightPort)
+    assert(options.controlPort)
 
     const leftIPCPort = new IPCPort(options.leftPort)
     const rightIPCPort = new IPCPort(options.rightPort)
+    const controlIPCPort = new IPCPort(options.controlPort)
     const frameCaches: (pointer<AVFrameRef> | VideoFrame)[] = []
 
     const avframePool = new AVFramePoolImpl(accessof(options.avframeList), options.avframeListMutex)
@@ -265,6 +292,7 @@ export default class VideoDecodePipeline extends Pipeline {
       resource: await compileResource(options.resource, true),
       leftIPCPort,
       rightIPCPort,
+      controlIPCPort,
       softwareDecoder: null,
       hardwareDecoder: null,
       frameCaches,
@@ -668,6 +696,7 @@ export default class VideoDecodePipeline extends Pipeline {
         task.softwareDecoder = softwareDecoder
         task.hardwareDecoder = hardwareDecoder
         task.targetDecoder = task.hardwareDecoder || task.softwareDecoder
+
         task.hardwareRetryCount = 0
 
         if (task.hardwareDecoder) {
@@ -700,6 +729,9 @@ export default class VideoDecodePipeline extends Pipeline {
             logger.debug(`reopen video soft decoder, taskId: ${task.taskId}`)
           }
         }
+
+        this.notifyDecoderChange(task)
+
         resolve(0)
       })
     }
@@ -758,6 +790,9 @@ export default class VideoDecodePipeline extends Pipeline {
             }
           }
         }
+
+        this.notifyDecoderChange(task)
+
         resolve(0)
       })
     }
@@ -890,9 +925,13 @@ export default class VideoDecodePipeline extends Pipeline {
 
   public async unregisterTask(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId)
+
+    this.notifyDecoderChange(task, 'NONE')
+
     if (task) {
       task.rightPort.close()
       task.leftPort.close()
+      task.controlPort.close()
       if (task.softwareDecoder) {
         task.softwareDecoder.close()
       }

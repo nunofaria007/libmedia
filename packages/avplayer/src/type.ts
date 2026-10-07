@@ -16,3 +16,5 @@ export declare function playerEventProgress(progress: AVPlayerProgress, data: an
 export declare function playerEventVolumeChange(volume: double): void
 
 export declare function playerEventSubtitleDelayChange(delay: int32): void
+
+export declare function playerDecoderChange(decoder: string, isFallback: boolean): void
