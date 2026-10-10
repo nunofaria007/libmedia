@@ -1,6 +1,6 @@
 // Fragment shader for WebGPUExternalRender
 // Traditional bob deinterlacer: the selected field (deint.field: 0 = even rows,
-// 1 = odd rows) is stretched to full height with linear interpolation.
+// 1 = odd rows; 2 = progressive, plain sample) is stretched to full height with linear interpolation.
 // Two texture samples per pixel.
 //
 // `sampleAlpha` (and the aTexture binding when alpha is used) is prepended
@@ -19,6 +19,12 @@ struct Deint {
 
 @fragment
 fn main(@location(0) in_texcoord: vec4<f32>) -> @location(0) vec4<f32> {
+  // 2 = progressive frame, no deinterlacing
+  if (deint.field == 2u) {
+    let c = textureSampleBaseClampToEdge(eTexture, s, in_texcoord.xy);
+    return vec4<f32>(c.rgb, sampleAlpha(in_texcoord.xy, c.a));
+  }
+
   let h = i32(textureDimensions(eTexture).y);
   let p = i32(deint.field);
 

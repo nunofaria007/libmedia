@@ -1,20 +1,20 @@
 /*
  * libmedia VideoRenderPipeline
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -86,6 +86,9 @@ import Pipeline from './Pipeline'
 
 import type { AlphaVideoFrame } from './struct/type'
 import { isAlphaVideoFrame } from './util'
+
+// interlace info attached to a decoded VideoFrame (WebGPU bob deinterlacing)
+type InterlacedVideoFrame = VideoFrame & { interlace?: { topFieldFirst: boolean } }
 
 type WebGPURenderFactory = {
   new(canvas: HTMLCanvasElement | OffscreenCanvas, options: WebGPURenderOptions): WebGPURender,
@@ -177,6 +180,10 @@ type SelfTask = VideoRenderTaskOptions & {
   pausing: boolean
 
   lastRenderTimestamp: number
+  // bob: the frame whose second field is still to be drawn, and when
+  fieldFrame: pointer<AVFrameRef> | VideoFrame | AlphaVideoFrame | null
+  fieldDue: int64
+  fieldNextPts: int64
 
   avframePool: AVFramePoolImpl
 }
@@ -237,6 +244,9 @@ export default class VideoRenderPipeline extends Pipeline {
       pausing: false,
 
       lastRenderTimestamp: 0,
+      fieldFrame: null,
+      fieldDue: 0n,
+      fieldNextPts: 0n,
       avframePool: new AVFramePoolImpl(accessof(options.avframeList), options.avframeListMutex)
     }
 
@@ -271,18 +281,83 @@ export default class VideoRenderPipeline extends Pipeline {
   }
 
   private async pullFrame(task: SelfTask) {
-    const frame = await task.leftIPCPort.request<pointer<AVFrameRef> | VideoFrame | { ref: VideoFrame, alpha: VideoFrame }>('pull')
+    const frame = await task.leftIPCPort.request<
+    pointer<AVFrameRef> | VideoFrame | { ref: VideoFrame, alpha?: VideoFrame, interlace?: { topFieldFirst: boolean } }
+    >('pull')
     if (is.number(frame) || isPointer(frame) || frame instanceof VideoFrame) {
       return frame as (pointer<AVFrameRef> | VideoFrame)
     }
-    (frame.ref as AlphaVideoFrame).alpha = frame.alpha
+    if (frame.alpha) {
+      (frame.ref as AlphaVideoFrame).alpha = frame.alpha
+    }
+    if (frame.interlace) {
+      (frame.ref as InterlacedVideoFrame).interlace = frame.interlace
+    }
     return frame.ref
+  }
+
+  /**
+   * Single place that renders a frame. WebGPUExternalRender gets the field to
+   * show when the frame was flagged as interlaced (0 = top field, 1 = bottom
+   * field, the first one in display order); everything else renders as before.
+   */
+  private renderFrame(task: SelfTask, frame: pointer<AVFrameRef> | VideoFrame | AlphaVideoFrame, secondField: boolean = false) {
+    const alpha = (frame as AlphaVideoFrame).alpha
+    if (defined(ENABLE_WEBGPU) && task.render instanceof WebGPUExternalRender && !isPointer(frame)) {
+      const interlace = (frame as InterlacedVideoFrame).interlace
+      let field: 0 | 1 | undefined
+      if (interlace) {
+        field = interlace.topFieldFirst ? 0 : 1
+        if (secondField) {
+          field = field === 0 ? 1 : 0
+        }
+      }
+      task.render.render(frame as VideoFrame, alpha, field)
+    }
+    else {
+      task.render.render(frame, alpha)
+    }
+  }
+
+  /**
+   * After the first field of an interlaced frame was drawn: when the second
+   * field is due (halfway to the next frame's pts). Returns false when there is
+   * nothing to schedule (progressive frame, other renderer, no next frame).
+   */
+  private scheduleSecondField(task: SelfTask, pts: int64): boolean {
+    if (!defined(ENABLE_WEBGPU)
+      || !(task.render instanceof WebGPUExternalRender)
+      || !task.renderRedyed
+      || task.skipRender
+      || task.seeking
+      || isPointer(task.backFrame)
+      || !(task.backFrame as InterlacedVideoFrame).interlace
+      || !task.frontBuffered
+      || !task.frontFrame
+      || isPointer(task.frontFrame)
+      || is.number(task.frontFrame)
+    ) {
+      return false
+    }
+    const nextPts = avRescaleQ(
+      static_cast<int64>((task.frontFrame as VideoFrame).timestamp as uint32),
+      AV_TIME_BASE_Q,
+      AV_MILLI_TIME_BASE_Q
+    )
+    if (nextPts <= pts) {
+      return false
+    }
+    task.fieldFrame = task.backFrame
+    task.fieldDue = pts + (nextPts - pts) / 2n
+    task.fieldNextPts = nextPts
+    return true
   }
 
   private swap(task: SelfTask) {
     if (task.seeking) {
       return
     }
+    task.fieldFrame = null
     if (task.backFrame) {
       if (!isPointer(task.backFrame)) {
         task.backFrame.close()
@@ -476,7 +551,7 @@ export default class VideoRenderPipeline extends Pipeline {
       task.render.setRotate(task.renderRotate ?? 0, false)
       task.render.enableHorizontalFlip(task.flipHorizontal ?? false)
       task.render.enableVerticalFlip(task.flipVertical ?? false)
-      task.render.render(frame, (frame as AlphaVideoFrame).alpha)
+      this.renderFrame(task, frame)
       task.render.clear()
     }
     catch (error) {
@@ -579,6 +654,29 @@ export default class VideoRenderPipeline extends Pipeline {
           return
         }
 
+        // bob: the second field of the frame shown last is due halfway to the next frame
+        if (task.fieldFrame) {
+          if (task.fieldFrame !== task.backFrame) {
+            task.fieldFrame = null
+          }
+          else if (task.masterTimer.getMasterTime() < task.fieldDue) {
+            task.loop.emptyTask()
+            return
+          }
+          else {
+            // skip it when the next frame is already due (running late)
+            if (task.renderRedyed
+              && !task.skipRender
+              && task.masterTimer.getMasterTime() < task.fieldNextPts
+            ) {
+              this.renderFrame(task, task.backFrame, true)
+              task.stats.videoFrameRenderCount++
+            }
+            this.swap(task)
+            return
+          }
+        }
+
         if (!task.isSupport(task.backFrame)) {
           if (task.render) {
             if (!task.renderRedyed) {
@@ -674,7 +772,7 @@ export default class VideoRenderPipeline extends Pipeline {
             && !task.skipRender
             && (inWorker || (-diff < 100n) || (task.renderFrameCount & 0x01n))
           ) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
             task.stats.videoFrameRenderCount++
             if (task.lastRenderTimestamp) {
               task.stats.videoFrameRenderIntervalMax = Math.max(
@@ -709,6 +807,10 @@ export default class VideoRenderPipeline extends Pipeline {
             task.controlIPCPort.notify('syncPts', {
               pts
             })
+          }
+          if (this.scheduleSecondField(task, pts)) {
+            // the swap happens after the second field
+            return
           }
           this.swap(task)
           if (task.masterTimer.getMasterTime() - pts >= 2000n) {
@@ -858,7 +960,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.render.setRenderMode(mode)
         nextTick(() => {
           if (task.pausing && task.backFrame && task.render) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
           }
         })
       }
@@ -873,7 +975,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.render.setRotate(rotate)
         nextTick(() => {
           if (task.pausing && task.backFrame && task.render) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
           }
         })
       }
@@ -888,7 +990,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.render.enableHorizontalFlip(enable)
         nextTick(() => {
           if (task.pausing && task.backFrame && task.render) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
           }
         })
       }
@@ -903,7 +1005,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.render.enableVerticalFlip(enable)
         nextTick(() => {
           if (task.pausing && task.backFrame && task.render) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
           }
         })
       }
@@ -917,7 +1019,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.render.viewport(width, height)
         nextTick(() => {
           if (task.pausing && task.backFrame && task.render) {
-            task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+            this.renderFrame(task, task.backFrame)
           }
         })
       }
@@ -1145,7 +1247,7 @@ export default class VideoRenderPipeline extends Pipeline {
         task.loop.start()
       }
       else if (task.backFrame) {
-        task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+        this.renderFrame(task, task.backFrame)
       }
 
       logger.debug(`after seek end, taskId: ${task.taskId}`)
@@ -1167,7 +1269,7 @@ export default class VideoRenderPipeline extends Pipeline {
             AV_TIME_BASE_Q,
             AV_MILLI_TIME_BASE_Q
           )
-        task.render.render(task.backFrame, (task.backFrame as AlphaVideoFrame).alpha)
+        this.renderFrame(task, task.backFrame)
         task.stats.videoCurrentTime = pts
         task.stats.videoFrameRenderCount++
         task.currentPTS = pts

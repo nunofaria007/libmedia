@@ -1,20 +1,20 @@
 /*
  * libmedia AVPacket defined
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -67,9 +67,19 @@ export const enum AVPacketFlags {
   AV_PKT_FLAG_END = 32,
 
   /**
-   * 对于 h264/h265/h266 标记是否是 annexb 码流格式，未置此标志则为 avcc 格式
+   * 对于 h264/h265/h266 标记是否是 annexb 码流格式，未置此标志则为 avcc 格式   
    */
-  AV_PKT_FLAG_H26X_ANNEXB = 64
+  AV_PKT_FLAG_H26X_ANNEXB = 64,
+
+  /**
+   * The picture this packet decodes to is interlaced (set by VideoPacketPipeline for H.264)
+   */
+  AV_PKT_FLAG_INTERLACED = 128,
+
+  /**
+   * With AV_PKT_FLAG_INTERLACED: the top field is displayed first
+   */
+  AV_PKT_FLAG_TOP_FIELD_FIRST = 256
 }
 
 @struct
@@ -89,7 +99,7 @@ export class AVProducerReferenceTime {
 
 
 /**
- * FFmpeg AVPacket 定义
+ * FFmpeg AVPacket 定义 
  */
 @struct
 export default class AVPacket {

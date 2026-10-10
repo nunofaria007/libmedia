@@ -24,7 +24,7 @@
  */
 
 import vertexSource from './webgpu/wgsl/vertex.wgsl'
-import fragmentSource from './webgpu/wgsl/external3.wgsl'
+import fragmentSource from './webgpu/wgsl/bob.wgsl'
 import type { WebGPURenderOptions } from './WebGPURender'
 import WebGPURender from './WebGPURender'
 
@@ -54,20 +54,7 @@ export default class WebGPUExternalRender extends WebGPURender {
 
   private hasAlpha: boolean
 
-  /**
-   * Field order of the source. true = top field first (most 1080i / 576i broadcast),
-   * false = bottom field first (e.g. DV).
-   */
-  public topFieldFirst = true
-
   private deintBuffer: GPUBuffer | null = null
-
-  // bob state: the second field of a frame is drawn half a frame later
-  private pendingTimer: ReturnType<typeof setTimeout> | null = null
-  private pendingFrame: VideoFrame | null = null
-  private pendingAlpha: VideoFrame | null = null
-  private lastTimestamp = -1
-  private lastDuration = 0
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options: WebGPURenderOptions) {
     super(canvas, options)
@@ -141,25 +128,11 @@ export default class WebGPUExternalRender extends WebGPURender {
     this.bindGroupLayout = this.device.createBindGroupLayout(descriptor)
   }
 
-  private cancelPending() {
-    if (this.pendingTimer !== null) {
-      clearTimeout(this.pendingTimer)
-      this.pendingTimer = null
-    }
-    if (this.pendingFrame) {
-      this.pendingFrame.close()
-      this.pendingFrame = null
-    }
-    if (this.pendingAlpha) {
-      this.pendingAlpha.close()
-      this.pendingAlpha = null
-    }
-  }
-
   /**
-   * Draw one field (0 = even rows, 1 = odd rows) of the frame, deinterlaced.
+   * Draw the frame. field: 0 = even rows (top field), 1 = odd rows (bottom field),
+   * both bob deinterlaced; 2 = progressive, drawn as is.
    */
-  private draw(frame: VideoFrame, alpha: VideoFrame | undefined, field: 0 | 1) {
+  private draw(frame: VideoFrame, alpha: VideoFrame | undefined, field: 0 | 1 | 2) {
 
     this.checkFrame(frame, alpha)
 
@@ -239,12 +212,10 @@ export default class WebGPUExternalRender extends WebGPURender {
   }
 
   /**
-   * Bob deinterlace: every source frame produces two pictures, one per field.
-   *
-   * - `field` omitted: the first field is drawn now and the second one is drawn
-   *   automatically half a frame duration later (double frame rate output).
-   * - `field` given (0 or 1): only that field is drawn, so the caller can drive
-   *   the double-rate timing itself by calling render() twice per frame.
+   * - `field` omitted: progressive frame, drawn as is.
+   * - `field` 0 / 1: only that field (0 = top, 1 = bottom) is drawn, bob
+   *   deinterlaced. The caller drives the double-rate timing by calling
+   *   render() once per field.
    */
   public render(frame: VideoFrame, alpha?: VideoFrame, field?: 0 | 1): void {
 
@@ -252,57 +223,7 @@ export default class WebGPUExternalRender extends WebGPURender {
       return
     }
 
-    // a new frame always supersedes a second field that has not been shown yet
-    this.cancelPending()
-
-    if (field !== undefined) {
-      this.draw(frame, alpha, field)
-      return
-    }
-
-    const first: 0 | 1 = this.topFieldFirst ? 0 : 1
-    this.draw(frame, alpha, first)
-
-    // frame duration in microseconds: from the frame itself, else from timestamps
-    let duration = frame.duration || 0
-    if (!duration && this.lastTimestamp >= 0) {
-      const delta = frame.timestamp - this.lastTimestamp
-      if (delta > 0 && delta < 200000) {
-        duration = delta
-      }
-    }
-    this.lastTimestamp = frame.timestamp
-    if (duration) {
-      this.lastDuration = duration
-    }
-    else {
-      duration = this.lastDuration
-    }
-    if (!duration) {
-      // no timing information yet, the first field only
-      return
-    }
-
-    // clone() shares the underlying media resource, it does not copy pixels
-    this.pendingFrame = frame.clone()
-    this.pendingAlpha = alpha ? alpha.clone() : null
-
-    this.pendingTimer = setTimeout(() => {
-      this.pendingTimer = null
-      const pendingFrame = this.pendingFrame
-      const pendingAlpha = this.pendingAlpha
-      this.pendingFrame = null
-      this.pendingAlpha = null
-      if (pendingFrame) {
-        if (!this.lost) {
-          this.draw(pendingFrame, pendingAlpha || undefined, first === 0 ? 1 : 0)
-        }
-        pendingFrame.close()
-      }
-      if (pendingAlpha) {
-        pendingAlpha.close()
-      }
-    }, duration / 2000)
+    this.draw(frame, alpha, field === undefined ? 2 : field)
   }
 
   static isSupport(frame: pointer<AVFrame> | VideoFrame | ImageBitmap): boolean {

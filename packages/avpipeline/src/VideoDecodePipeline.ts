@@ -101,6 +101,10 @@ import Pipeline from './Pipeline'
 import type { AlphaVideoFrame } from './struct/type'
 import { isAlphaVideoFrame } from './util'
 
+// interlace info attached to a decoded VideoFrame (WebGPU bob deinterlacing)
+type InterlaceInfo = { topFieldFirst: boolean }
+type InterlacedVideoFrame = VideoFrame & { interlace?: InterlaceInfo }
+
 import type { Data } from '@libmedia/common'
 import { bigint } from '../../common/src/util/is'
 
@@ -205,9 +209,12 @@ export default class VideoDecodePipeline extends Pipeline {
         task.needKeyFrame = true
         task.leftIPCPort.request('requestKeyframe')
       },
-      onReceiveVideoFrame(frame, alpha) {
+      onReceiveVideoFrame(frame, alpha, interlace) {
         if (alpha) {
           (frame as AlphaVideoFrame).alpha = alpha
+        }
+        if (interlace) {
+          (frame as InterlacedVideoFrame).interlace = interlace
         }
         task.firstDecoded = true
         task.frameCaches.push(frame)
@@ -334,7 +341,15 @@ export default class VideoDecodePipeline extends Pipeline {
         rightIPCPort.reply(request, frame)
       }
       else if (isAlphaVideoFrame(frame)) {
-        rightIPCPort.reply(request, { ref: frame, alpha: frame.alpha }, null, [frame, frame.alpha])
+        rightIPCPort.reply(
+          request,
+          { ref: frame, alpha: frame.alpha, interlace: (frame as InterlacedVideoFrame).interlace },
+          null,
+          [frame, frame.alpha]
+        )
+      }
+      else if ((frame as InterlacedVideoFrame).interlace) {
+        rightIPCPort.reply(request, { ref: frame, interlace: (frame as InterlacedVideoFrame).interlace }, null, [frame])
       }
       else {
         rightIPCPort.reply(request, frame, null, [frame])

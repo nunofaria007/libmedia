@@ -97,6 +97,8 @@ type SelfTask = VideoPacketTaskOptions & {
   pendingEnd?: number
   /** Timestamp of the previous packet, used to spot jumps (queue cropping by the jitter buffer, seeks). */
   lastTs?: bigint | null
+  /** Last interlace description that was logged, so the log only shows changes. */
+  interlaceState?: string
 }
 
 export default class VideoPacketPipeline extends Pipeline {
@@ -355,22 +357,52 @@ export default class VideoPacketPipeline extends Pipeline {
     // If this packet is sent now and is also the first field kept for pairing, the two must not share buffers: sending one
     // transfers (detaches) them. Keep a separate copy as the held packet.
     task.heldPacket = holdNow ? (basePacket === serialized ? this.derivePacket(original) : serialized) : null
-    const out = chunks.map((chunk, i) => this.applyChunk(i === 0 ? basePacket : this.derivePacket(original), chunk))
+    const out = chunks.map((chunk, i) => this.applyChunk(task, i === 0 ? basePacket : this.derivePacket(original), chunk))
     if (out.length > 1) {
       task.packetCaches.push(...out.slice(1))
     }
     return out[0]
   }
 
-  /** Writes a pipeline chunk into a packet. Data is only replaced when the chunk differs from what the packet carried. */
-  private applyChunk(packet: AVPacketSerialize, chunk: OutputChunk): AVPacketSerialize {
+  /**
+   * Writes a pipeline chunk into a packet. Data is only replaced when the chunk differs from what the packet carried.
+   * Also tells the renderer how to deinterlace the picture this packet will decode to (see stampInterlace).
+   */
+  private applyChunk(task: SelfTask, packet: AVPacketSerialize, chunk: OutputChunk): AVPacketSerialize {
     if (chunk.changed) {
       packet.data = chunk.data
     }
     if (chunk.key || chunk.idr) {
       packet.flags |= AVPacketFlags.AV_PKT_FLAG_KEY
     }
+    this.stampInterlace(task, packet, chunk)
     return packet
+  }
+
+  /**
+   * Sets AV_PKT_FLAG_INTERLACED / AV_PKT_FLAG_TOP_FIELD_FIRST on a packet.
+   *
+   * - progressive sequence (frame_mbs_only_flag = 1): neither flag
+   * - field pictures (PAFF), already paired by the fix pipeline: field order is the parity of the first field
+   * - frame pictures in an interlaced sequence (MBAFF or plain): order is not signalled here, top field first is assumed
+   */
+  private stampInterlace(task: SelfTask, packet: AVPacketSerialize, chunk: OutputChunk) {
+    const sps = task.h264FixPipeline?.spsInfo
+    packet.flags &= ~(AVPacketFlags.AV_PKT_FLAG_INTERLACED | AVPacketFlags.AV_PKT_FLAG_TOP_FIELD_FIRST)
+    let state = 'progressive'
+    if (sps && sps.interlaced) {
+      const fieldCoded = !!chunk.au.field
+      const topFieldFirst = !(fieldCoded && chunk.au.bottom)
+      packet.flags |= AVPacketFlags.AV_PKT_FLAG_INTERLACED
+      if (topFieldFirst) {
+        packet.flags |= AVPacketFlags.AV_PKT_FLAG_TOP_FIELD_FIRST
+      }
+      state = `interlaced, ${topFieldFirst ? 'top' : 'bottom'} field first, ${fieldCoded ? 'field pictures (PAFF)' : (sps.mbaff ? 'frame pictures (MBAFF)' : 'frame pictures')}`
+    }
+    if (state !== task.interlaceState) {
+      task.interlaceState = state
+      logger.info(`[VideoPacketPipeline] stream structure: ${state}, taskId: ${task.taskId}`)
+    }
   }
 
   /** Copy of a packet that can be sent on its own: replyPacket transfers buffers, so neither data nor side data may be shared. */
@@ -392,7 +424,7 @@ export default class VideoPacketPipeline extends Pipeline {
     task.heldPacket = null
     task.outputChunks = []
     pipeline.flush()
-    return task.outputChunks.map((chunk, i) => this.applyChunk(i === 0 ? held : this.derivePacket(held), chunk))
+    return task.outputChunks.map((chunk, i) => this.applyChunk(task, i === 0 ? held : this.derivePacket(held), chunk))
   }
 
   /** Forgets the start state of the fixes: the next key frame is converted and its leading pictures dropped, as at stream start. */
@@ -454,6 +486,7 @@ export default class VideoPacketPipeline extends Pipeline {
       task.lastTs = null
       task.h264Bypass = false
       task.keyFramesWithoutParams = 0
+      task.interlaceState = undefined
     }
   }
 

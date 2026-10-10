@@ -1,20 +1,20 @@
 /*
  * libmedia Webcodec video decoder
  *
- * 版权所有 (C) 2024 赵高兴
+ * 版权所有 (C) 2024 赵高兴 
  * Copyright (C) 2024 Gaoxing Zhao
  *
- * 此文件是 libmedia 的一部分
+ * 此文件是 libmedia 的一部分 
  * This file is part of libmedia.
  * 
  * libmedia 是自由软件；您可以根据 GNU Lesser General Public License（GNU LGPL）3.1
- * 或任何其更新的版本条款重新分发或修改它
+ * 或任何其更新的版本条款重新分发或修改它 
  * libmedia is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 3.1 of the License, or (at your option) any later version.
  * 
- * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证
+ * libmedia 希望能够为您提供帮助，但不提供任何明示或暗示的担保，包括但不限于适销性或特定用途的保证 
  * 您应自行承担使用 libmedia 的风险，并且需要遵守 GNU Lesser General Public License 中的条款和条件。
  * libmedia is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -55,8 +55,18 @@ import {
 
 import { logger, browser, os, array, withResolvers } from '@libmedia/common'
 
+/** Present only for frames decoded from a packet marked AV_PKT_FLAG_INTERLACED. */
+export type VideoInterlaceInfo = {
+  topFieldFirst: boolean
+}
+
+/** Interlace info of packets that are still in the decoder is kept per timestamp; frames the decoder drops must not pile up. */
+const INTERLACE_MAP_MAX = 64
+/** Frames between two interlace matching summaries in the log (10 s at 25 fps). */
+const INTERLACE_SUMMARY_FRAMES = 250
+
 export type WebVideoDecoderOptions = {
-  onReceiveVideoFrame: (frame: VideoFrame, alpha?: VideoFrame) => void
+  onReceiveVideoFrame: (frame: VideoFrame, alpha?: VideoFrame, interlace?: VideoInterlaceInfo) => void
   onError: (error?: Error) => void
   enableHardwareAcceleration?: boolean
   optimizeForLatency?: boolean
@@ -85,6 +95,10 @@ export default class WebVideoDecoder {
 
   private sort: boolean
 
+  /** packet timestamp (as seen by the decoder) -> top field first, for packets marked interlaced */
+  private interlaceInfo: Map<number, boolean> = new Map()
+  private interlaceStats = { stamped: 0, matched: 0, outputs: 0 }
+
   private keyframeRequire: boolean = false
   private extradataRequire: boolean = false
   private alphaQueue: VideoFrame[]
@@ -104,6 +118,28 @@ export default class WebVideoDecoder {
 
     // safari 输出帧在有 B 帧的情况下没有按 pts 排序递增输出，这里需要进行排序输出
     this.sort = !!(browser.safari || os.ios)
+  }
+
+  /** Interlace info of the packet this frame was decoded from. Only packets marked interlaced have one. */
+  private takeInterlace(frame: VideoFrame): VideoInterlaceInfo | undefined {
+    const stats = this.interlaceStats
+    let info: VideoInterlaceInfo | undefined
+    const topFieldFirst = this.interlaceInfo.get(frame.timestamp)
+    if (topFieldFirst !== undefined) {
+      this.interlaceInfo.delete(frame.timestamp)
+      stats.matched++
+      info = { topFieldFirst }
+    }
+    if (++stats.outputs >= INTERLACE_SUMMARY_FRAMES) {
+      if (stats.stamped || stats.matched) {
+        logger.info(`video decoder interlace info over the last ${stats.outputs} frames: ${stats.stamped} packets marked, `
+          + `${stats.matched} frames matched, ${this.interlaceInfo.size} pending`)
+      }
+      stats.stamped = 0
+      stats.matched = 0
+      stats.outputs = 0
+    }
+    return info
   }
 
   private getAlphaFrame(frame: VideoFrame) {
@@ -153,7 +189,7 @@ export default class WebVideoDecoder {
         const output = this.outputQueue.shift()!
         const alphaVideoFrame = this.getAlphaFrame(output)
         if (this.options.onReceiveVideoFrame) {
-          this.options.onReceiveVideoFrame(output, alphaVideoFrame)
+          this.options.onReceiveVideoFrame(output, alphaVideoFrame, this.takeInterlace(output))
         }
         else {
           output.close()
@@ -167,7 +203,7 @@ export default class WebVideoDecoder {
     else {
       const alphaVideoFrame = this.getAlphaFrame(frame)
       if (this.options.onReceiveVideoFrame) {
-        this.options.onReceiveVideoFrame(frame, alphaVideoFrame)
+        this.options.onReceiveVideoFrame(frame, alphaVideoFrame, this.takeInterlace(frame))
       }
       else {
         frame.close()
@@ -227,6 +263,7 @@ export default class WebVideoDecoder {
     }
 
     this.decoder!.reset()
+    this.interlaceInfo.clear()
 
     const config: VideoDecoderConfig = {
       codec: this.options.codec ?? getVideoCodec(this.parameters, buffer),
@@ -388,6 +425,7 @@ export default class WebVideoDecoder {
     this.outputQueue.length = 0
     this.dtsQueue.length = 0
     this.alphaQueue.length = 0
+    this.interlaceInfo.clear()
 
     return 0
   }
@@ -491,6 +529,20 @@ export default class WebVideoDecoder {
         }
       }
 
+      if (avpacket.flags & AVPacketFlags.AV_PKT_FLAG_INTERLACED) {
+        // frames get this timestamp back; without PTS the frame is rebuilt with the DTS (see output)
+        const interlaceKey = (this.parameters.flags & AVCodecParameterFlags.AV_CODECPAR_FLAG_NO_PTS)
+          ? static_cast<double>(avRescaleQ2(avpacket.dts, addressof(avpacket.timeBase), AV_TIME_BASE_Q))
+          : videoChunk.timestamp
+        if (interlaceKey !== NOPTS_VALUE) {
+          this.interlaceInfo.set(interlaceKey, !!(avpacket.flags & AVPacketFlags.AV_PKT_FLAG_TOP_FIELD_FIRST))
+          this.interlaceStats.stamped++
+          if (this.interlaceInfo.size > INTERLACE_MAP_MAX) {
+            this.interlaceInfo.delete(this.interlaceInfo.keys().next().value!)
+          }
+        }
+      }
+
       this.decoder!.decode(videoChunk)
       if (this.parameters.flags & AVCodecParameterFlags.AV_CODECPAR_FLAG_NO_PTS) {
         this.dtsQueue.push(static_cast<double>(avRescaleQ2(avpacket.dts, addressof(avpacket.timeBase), AV_TIME_BASE_Q)))
@@ -528,7 +580,7 @@ export default class WebVideoDecoder {
         const frame = this.outputQueue.shift()!
         const alphaVideoFrame = this.getAlphaFrame(frame)
         if (this.options.onReceiveVideoFrame) {
-          this.options.onReceiveVideoFrame(frame, alphaVideoFrame)
+          this.options.onReceiveVideoFrame(frame, alphaVideoFrame, this.takeInterlace(frame))
         }
         else {
           frame.close()
@@ -538,6 +590,7 @@ export default class WebVideoDecoder {
         }
       }
     }
+    this.interlaceInfo.clear()
     this.keyframeRequire = true
     return 0
   }
@@ -572,6 +625,7 @@ export default class WebVideoDecoder {
     this.inputQueue.length = 0
     this.outputQueue.length = 0
     this.alphaQueue.length = 0
+    this.interlaceInfo.clear()
   }
 
   public getQueueLength() {
